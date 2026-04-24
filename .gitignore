@@ -1,4 +1,12 @@
 node_modules/
 dist/
+release/
 bin/*
 !bin/.gitkeep
+
+tf-workspace/.terraform/
+tf-workspace/.terraform.lock.hcl
+tf-workspace/.terraform.tfstate
+tf-workspace/.terraform.tfstate.backup
+tf-workspace/.terraformrc
+ts-workspace/versions_override.tf
