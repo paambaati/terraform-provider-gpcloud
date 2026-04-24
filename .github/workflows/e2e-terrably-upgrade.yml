@@ -103,6 +103,7 @@ jobs:
 
       # ── 4. Publish to Terraform Registry via GitHub Release ─────────────────
       - name: Import GPG key
+        id: gpg
         uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -114,6 +115,7 @@ jobs:
             --release-version ${{ steps.bump.outputs.new_version }} \
             --binaries-dir release \
             --tag ${{ steps.bump.outputs.new_tag }} \
+            --gpg-key ${{ steps.gpg.outputs.fingerprint }} \
             --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
