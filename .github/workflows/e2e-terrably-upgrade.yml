@@ -120,6 +120,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Remove GPG key from keyring
+        if: always()
+        run: |
+          gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
+
       # ── 5. Poll TF Registry until new version is indexed ────────────────────
       - name: Wait for registry to index new version
         timeout-minutes: 15
@@ -144,6 +149,7 @@ jobs:
 
       # ── 6. Run Terraform E2E test ────────────────────────────────────────────
       - uses: hashicorp/setup-terraform@v4
+        name: Setup Terraform
         with:
           terraform_version: latest
 
@@ -168,19 +174,19 @@ jobs:
           }
           EOF
 
-      - name: terraform init
+      - name: Run terraform init
         working-directory: tf-workspace
         run: terraform init -input=false
 
-      - name: terraform validate
+      - name: Run terraform validate
         working-directory: tf-workspace
         run: terraform validate
 
-      - name: terraform plan
+      - name: Run terraform plan
         working-directory: tf-workspace
         run: terraform plan -input=false -out=tfplan
 
-      - name: terraform apply
+      - name: Run terraform apply
         working-directory: tf-workspace
         run: terraform apply -input=false tfplan
 
@@ -194,7 +200,7 @@ jobs:
           fi
           echo "✓ item_id = ${ITEM_ID}"
 
-      - name: terraform destroy
+      - name: Run terraform destroy
         if: always()  # always clean up, even if verify fails
         working-directory: tf-workspace
         run: terraform destroy -input=false -auto-approve
