@@ -1,6 +1,6 @@
 {
   "name": "terraform-provider-gpcloud",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "type": "commonjs",
   "scripts": {
@@ -10,7 +10,7 @@
     "publish": "terrably publish"
   },
   "dependencies": {
-    "terrably": "0.0.7"
+    "terrably": "0.0.8"
   },
   "devDependencies": {
     "@types/node": "25.6.0",
