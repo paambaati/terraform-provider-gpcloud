@@ -1,0 +1,199 @@
+name: End-to-end test
+
+# Triggered by paambaati/terrably after a successful npm publish.
+# Bumps the terrably dependency, rebuilds + republishes this provider to
+# the Terraform Registry, polls until the new version is indexed, then
+# runs terraform plan/apply/destroy against tf-workspace/ to verify nothing broke.
+
+on:
+  workflow_dispatch:
+    inputs:
+      terrably_version:
+        description: "terrably git tag to test against (e.g. v0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: e2e-terrably-upgrade
+  cancel-in-progress: false  # never cancel — a partial publish would leave registry in bad state.
+
+jobs:
+  upgrade-and-test:
+    name: Upgrade terrably → publish → E2E test
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write  # needed to push the version bump commit + create a GitHub release.
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Personal access token with repo + workflow scope.
+          token: ${{ secrets.PUBLISH_TOKEN }}
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+
+      # ── 1. Bump terrably version ────────────────────────────────────────────
+      - name: Resolve npm version from git tag
+        id: meta
+        run: |
+          # Strip leading "v" from e.g. "v0.1.0" → "0.1.0"
+          NPM_VERSION="${{ inputs.terrably_version }}"
+          NPM_VERSION="${NPM_VERSION#v}"
+          echo "npm_version=${NPM_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Update terrably in package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.dependencies.terrably = '${{ steps.meta.outputs.npm_version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install updated dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      # ── 2. Bump gpcloud version (patch) ────────────────────────────────────
+      # We need a new gpcloud version for each terrably release so the TF registry
+      # gets a distinct, unambiguous release to index.
+      - name: Bump provider patch version
+        id: bump
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${NEW_VERSION}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml
+          git commit -m "chore(e2e): bump terrably → ${{ inputs.terrably_version }}, provider → v${{ steps.bump.outputs.new_version }}"
+          git push
+
+      # ── 3. Build provider binaries ──────────────────────────────────────────
+      - name: Build provider
+        run: pnpm run build
+        # terrably build produces bin/terraform-provider-gpcloud (current platform)
+
+      - name: Rename binary for publish convention
+        run: |
+          mkdir -p release
+          cp bin/terraform-provider-gpcloud \
+             release/terraform-provider-gpcloud_linux_amd64
+
+      # ── 4. Publish to Terraform Registry via GitHub Release ─────────────────
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Publish provider (create GitHub Release + registry assets)
+        run: |
+          pnpm run publish \
+            --version ${{ steps.bump.outputs.new_version }} \
+            --binaries-dir release \
+            --tag ${{ steps.bump.outputs.new_tag }} \
+            --github-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 5. Poll TF Registry until new version is indexed ────────────────────
+      - name: Wait for registry to index new version
+        timeout-minutes: 15
+        run: |
+          TARGET_VERSION="${{ steps.bump.outputs.new_version }}"
+          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/versions"
+          echo "Polling ${URL} for version ${TARGET_VERSION}..."
+          for i in $(seq 1 30); do
+            VERSIONS=$(curl -sf "$URL" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              console.log(d.versions.map(v => v.version).join('\n'));
+            " 2>/dev/null || true)
+            if echo "$VERSIONS" | grep -qF "$TARGET_VERSION"; then
+              echo "✓ Version ${TARGET_VERSION} is live on the registry."
+              exit 0
+            fi
+            echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
+            sleep 30
+          done
+          echo "✗ Timed out waiting for version ${TARGET_VERSION} to appear on registry."
+          exit 1
+
+      # ── 6. Run Terraform E2E test ────────────────────────────────────────────
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: latest
+
+      - name: Remove local dev_overrides config
+        # tf-workspace/.terraformrc uses dev_overrides pointing to a local
+        # path. Terraform only reads ~/.terraformrc by default, but we delete it
+        # here to guarantee the E2E test always resolves the provider from the
+        # Terraform Registry, regardless of TF_CLI_CONFIG_FILE being set.
+        run: rm -f tf-workspace/.terraformrc
+
+      - name: Pin provider version in tf-workspace
+        run: |
+          # Inject exact version constraint so this run always uses the freshly published binary.
+          cat > tf-workspace/versions_override.tf << 'EOF'
+          terraform {
+            required_providers {
+              gpcloud = {
+                source  = "paambaati/gpcloud"
+                version = "= ${{ steps.bump.outputs.new_version }}"
+              }
+            }
+          }
+          EOF
+
+      - name: Run terraform init
+        working-directory: tf-workspace
+        run: terraform init -input=false
+
+      - name: Run terraform validate
+        working-directory: tf-workspace
+        run: terraform validate
+
+      - name: terraform plan
+        working-directory: tf-workspace
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Run terraform apply
+        working-directory: tf-workspace
+        run: terraform apply -input=false tfplan
+
+      - name: Verify output
+        working-directory: tf-workspace
+        run: |
+          ITEM_ID=$(terraform output -raw item_id 2>/dev/null || true)
+          if [ -z "$ITEM_ID" ]; then
+            echo "✗ item_id output is empty — apply may have failed silently."
+            exit 1
+          fi
+          echo "✓ item_id = ${ITEM_ID}"
+
+      - name: Run terraform destroy
+        if: always()  # always clean up, even if verify fails
+        working-directory: tf-workspace
+        run: terraform destroy -input=false -auto-approve
+
+      - name: Remove version override file
+        if: always()
+        run: rm -f tf-workspace/versions_override.tf
