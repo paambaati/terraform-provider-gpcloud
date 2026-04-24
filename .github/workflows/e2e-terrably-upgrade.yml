@@ -1,4 +1,4 @@
-name: End-to-end test
+name: E2E — terrably upgrade test
 
 # Triggered by paambaati/terrably after a successful npm publish.
 # Bumps the terrably dependency, rebuilds + republishes this provider to
@@ -20,21 +20,24 @@ concurrency:
 jobs:
   upgrade-and-test:
     name: Upgrade terrably → publish → E2E test
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     permissions:
       contents: write  # needed to push the version bump commit + create a GitHub release.
 
     steps:
       - uses: actions/checkout@v6
+        name: Checkout code
         with:
           # Personal access token with repo + workflow scope.
           token: ${{ secrets.PUBLISH_TOKEN }}
 
       - uses: pnpm/action-setup@v5
+        name: Setup pnpm
         with:
           version: 10
 
       - uses: actions/setup-node@v6
+        name: Setup Node
         with:
           node-version: "25.x"
           cache: pnpm
@@ -108,7 +111,7 @@ jobs:
       - name: Publish provider (create GitHub Release + registry assets)
         run: |
           pnpm run publish \
-            --version ${{ steps.bump.outputs.new_version }} \
+            --release-version ${{ steps.bump.outputs.new_version }} \
             --binaries-dir release \
             --tag ${{ steps.bump.outputs.new_tag }} \
             --github-release
@@ -143,8 +146,8 @@ jobs:
           terraform_version: latest
 
       - name: Remove local dev_overrides config
-        # tf-workspace/.terraformrc uses dev_overrides pointing to a local
-        # path. Terraform only reads ~/.terraformrc by default, but we delete it
+        # tf-workspace/.terraformrc uses dev_overrides pointing to a local path.
+        # Terraform only reads ~/.terraformrc by default, but we delete it
         # here to guarantee the E2E test always resolves the provider from the
         # Terraform Registry, regardless of TF_CLI_CONFIG_FILE being set.
         run: rm -f tf-workspace/.terraformrc
@@ -163,11 +166,11 @@ jobs:
           }
           EOF
 
-      - name: Run terraform init
+      - name: terraform init
         working-directory: tf-workspace
         run: terraform init -input=false
 
-      - name: Run terraform validate
+      - name: terraform validate
         working-directory: tf-workspace
         run: terraform validate
 
@@ -175,7 +178,7 @@ jobs:
         working-directory: tf-workspace
         run: terraform plan -input=false -out=tfplan
 
-      - name: Run terraform apply
+      - name: terraform apply
         working-directory: tf-workspace
         run: terraform apply -input=false tfplan
 
@@ -189,7 +192,7 @@ jobs:
           fi
           echo "✓ item_id = ${ITEM_ID}"
 
-      - name: Run terraform destroy
+      - name: terraform destroy
         if: always()  # always clean up, even if verify fails
         working-directory: tf-workspace
         run: terraform destroy -input=false -auto-approve
