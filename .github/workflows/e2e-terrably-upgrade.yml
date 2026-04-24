@@ -1,4 +1,4 @@
-name: E2E — terrably upgrade test
+name: terrably tests
 
 # Triggered by paambaati/terrably after a successful npm publish.
 # Bumps the terrably dependency, rebuilds + republishes this provider to
