@@ -36,7 +36,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "lts/*"
+          node-version: "25.x"
           cache: pnpm
 
       # ── 1. Bump terrably version ────────────────────────────────────────────
