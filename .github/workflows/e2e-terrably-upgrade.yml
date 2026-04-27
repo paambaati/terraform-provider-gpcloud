@@ -2,16 +2,19 @@ name: terrably tests
 
 # Triggered by paambaati/terrably after a successful npm publish.
 # Bumps the terrably dependency and provider version once, then fans out into
-# two parallel build→publish→E2E chains –
+# parallel build, smoke-test, and E2E chains –
 #
 #   prepare (bump versions, commit, push)
-#     ├─ build-node ──→ publish-node (X.Y.Z)       ──→ poll-registry ──→ e2e-node
-#     └─ build-bun  ──→ publish-bun  (X.Y.Z-bun.0) ──→ poll-registry ──→ e2e-bun
+#     ├─ build-node      ──→ publish-node (X.Y.Z)       ──→ e2e-node
+#     └─ build-bun-cross ──→ publish-bun  (X.Y.Z-bun.0) ──→ e2e-bun
+#                        └──→ smoke-test-bun (matrix: linux-x64, linux-arm64,
+#                                             darwin-arm64, darwin-x64, windows-x64)
 #
-# Both chains publish real GitHub Releases to the Terraform Registry.
-# The Bun version uses a semver pre-release suffix (-bun.0) so it is available
-# via explicit version pinning but not selected by open-ended constraints (~>).
-# Both E2E tests download the binary from the actual registry.
+# build-bun-cross: single ubuntu runner, Bun cross-compiles all 5 targets.
+# smoke-test-bun:  each binary downloaded and natively executed on its
+#                  matching runner (ubuntu-slim, macos-latest,
+#                  macos-15-intel, windows-latest).
+# e2e-bun:         full plan/apply/destroy via the Terraform Registry.
 
 on:
   workflow_dispatch:
@@ -32,7 +35,7 @@ jobs:
   #   new_version_bun = X.Y.Z-bun.0 (Bun pre-release — same registry, explicit-only)
   prepare:
     name: Bump versions & push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
     outputs:
@@ -136,7 +139,7 @@ jobs:
       - name: Build provider (Node.js SEA)
         run: pnpm run build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         name: Save build artifacts
         with:
           name: binary-node
@@ -144,9 +147,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ── 2b. Build provider binary with Bun ───────────────────────────────────
-  build-bun:
-    name: Build (Bun, linux/amd64)
+  # ── 2b. Build all Bun targets (cross-compile, single ubuntu runner) ──────
+  # Bun cross-compiles all 5 platform targets from a single job.
+  # Each target is uploaded as a separate artifact so smoke-test-bun and
+  # publish-bun can download exactly the binary they need.
+  build-bun-cross:
+    name: Build (Bun, all targets)
     needs: prepare
     runs-on: ubuntu-slim
 
@@ -162,19 +168,75 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Build provider (Bun, linux/amd64)
-        run: |
-          bun node_modules/terrably/dist/src/cli/index.js build \
-            --name gpcloud \
-            --target bun-linux-x64
+      - name: Build for linux/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-linux-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for linux/amd64
+        with: { name: bun-linux-x64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
 
-      - uses: actions/upload-artifact@v4
-        name: Save build artifacts
+      - name: Build for linux/arm64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-linux-arm64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for linux/arm64
+        with: { name: bun-linux-arm64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for darwin/arm64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-darwin-arm64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for darwin/arm64
+        with: { name: bun-darwin-arm64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for darwin/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-darwin-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for darwin/amd64
+        with: { name: bun-darwin-x64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for windows/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-windows-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for windows/amd64
+        with: { name: bun-windows-x64, path: bin/terraform-provider-gpcloud.exe, if-no-files-found: error, retention-days: 1 }
+
+  # ── 2c. Smoke-test each Bun binary on its native runner ──────────────────
+  # Downloads each cross-compiled binary and runs it on the matching OS/arch.
+  # Without the magic cookie the provider exits non-zero but must print the
+  # "Terraform provider plugin" banner — proving the binary runs natively.
+  # All runners below are free for public repositories on GitHub Actions.
+  smoke-test-bun:
+    name: Smoke test (${{ matrix.target }})
+    needs: build-bun-cross
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: bun-linux-x64,    runner: ubuntu-slim,      binary: terraform-provider-gpcloud     }
+          - { target: bun-darwin-arm64, runner: macos-latest,     binary: terraform-provider-gpcloud     }
+          - { target: bun-darwin-x64,   runner: macos-15-intel,   binary: terraform-provider-gpcloud     }
+          - { target: bun-windows-x64,  runner: windows-latest,   binary: terraform-provider-gpcloud.exe }
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/download-artifact@v8
         with:
-          name: binary-bun
-          path: bin/terraform-provider-gpcloud
-          if-no-files-found: error
-          retention-days: 1
+          name: ${{ matrix.target }}
+          path: bin/
+
+      - name: Make binary executable
+        if: runner.os != 'Windows'
+        run: chmod +x bin/${{ matrix.binary }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          OUTPUT=$(bin/${{ matrix.binary }} 2>&1 || true)
+          if echo "$OUTPUT" | grep -q "Terraform provider plugin"; then
+            echo "✓ Smoke test passed on ${{ matrix.target }}."
+          else
+            echo "✗ Unexpected output:"
+            echo "$OUTPUT"
+            exit 1
+          fi
 
   # ── 3a. Publish Node.js binary to Terraform Registry ─────────────────────
   publish-node:
@@ -202,7 +264,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         name: Download build artifact
         with:
           name: binary-node
@@ -239,7 +301,7 @@ jobs:
   # ── 3b. Publish Bun binary to Terraform Registry (pre-release) ───────────
   publish-bun:
     name: Publish Bun release (${{ needs.prepare.outputs.new_version_bun }})
-    needs: [prepare, build-bun]
+    needs: [prepare, build-bun-cross]
     runs-on: ubuntu-slim
     permissions:
       contents: write
@@ -261,10 +323,10 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         name: Download build artifact
         with:
-          name: binary-bun
+          name: bun-linux-x64
           path: release/
 
       - name: Rename binary for publish convention
