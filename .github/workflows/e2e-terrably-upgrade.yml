@@ -1,9 +1,20 @@
 name: terrably tests
 
 # Triggered by paambaati/terrably after a successful npm publish.
-# Bumps the terrably dependency, rebuilds + republishes this provider to
-# the Terraform Registry, polls until the new version is indexed, then
-# runs terraform plan/apply/destroy against tf-workspace/ to verify nothing broke.
+# Bumps the terrably dependency and provider version once, then fans out into
+# parallel build, smoke-test, and E2E chains –
+#
+#   prepare (bump versions, commit, push)
+#     ├─ build-node      ──→ publish-node (X.Y.Z)       ──→ e2e-node
+#     └─ build-bun-cross ──→ publish-bun  (X.Y.Z-bun.0) ──→ e2e-bun
+#                        └──→ smoke-test-bun (matrix: linux-x64, linux-arm64,
+#                                             darwin-arm64, darwin-x64, windows-x64)
+#
+# build-bun-cross: single ubuntu runner, Bun cross-compiles all 5 targets.
+# smoke-test-bun:  each binary downloaded and natively executed on its
+#                  matching runner (ubuntu-slim, macos-latest,
+#                  macos-15-intel, windows-latest).
+# e2e-bun:         full plan/apply/destroy via the Terraform Registry.
 
 on:
   workflow_dispatch:
@@ -18,11 +29,21 @@ concurrency:
   cancel-in-progress: false  # never cancel — a partial publish would leave registry in bad state.
 
 jobs:
-  upgrade-and-test:
-    name: Upgrade terrably → publish → E2E test
-    runs-on: ubuntu-latest
+  # ── 1. Bump terrably + provider version, commit, push ────────────────────
+  # One commit, two version strings derived from it:
+  #   new_version     = X.Y.Z       (Node.js release — semver stable)
+  #   new_version_bun = X.Y.Z-bun.0 (Bun pre-release — same registry, explicit-only)
+  prepare:
+    name: Bump versions & push
+    runs-on: ubuntu-slim
     permissions:
-      contents: write  # needed to push the version bump commit + create a GitHub release.
+      contents: write
+    outputs:
+      npm_version:     ${{ steps.meta.outputs.npm_version }}
+      new_version:     ${{ steps.bump.outputs.new_version }}
+      new_tag:         ${{ steps.bump.outputs.new_tag }}
+      new_version_bun: ${{ steps.bump.outputs.new_version_bun }}
+      new_tag_bun:     ${{ steps.bump.outputs.new_tag_bun }}
 
     steps:
       - uses: actions/checkout@v6
@@ -42,11 +63,9 @@ jobs:
           node-version: "25.x"
           cache: pnpm
 
-      # ── 1. Bump terrably version ────────────────────────────────────────────
       - name: Resolve npm version from git tag
         id: meta
         run: |
-          # Strip leading "v" from e.g. "v0.1.0" → "0.1.0"
           NPM_VERSION="${{ inputs.terrably_version }}"
           NPM_VERSION="${NPM_VERSION#v}"
           echo "npm_version=${NPM_VERSION}" >> "$GITHUB_OUTPUT"
@@ -63,7 +82,6 @@ jobs:
       - name: Install updated dependencies
         run: pnpm install --no-frozen-lockfile
 
-      # ── 2. Bump gpcloud version (patch) ────────────────────────────────────
       # We need a new gpcloud version for each terrably release so the TF registry
       # gets a distinct, unambiguous release to index.
       - name: Bump provider patch version
@@ -79,8 +97,12 @@ jobs:
             pkg.version = '${NEW_VERSION}';
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
-          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "new_tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "new_version=${NEW_VERSION}"          >> "$GITHUB_OUTPUT"
+          echo "new_tag=v${NEW_VERSION}"             >> "$GITHUB_OUTPUT"
+          # Bun pre-release: same base version, -bun.0 suffix.
+          # Semver pre-release — registry indexes it but Terraform won't auto-select it.
+          echo "new_version_bun=${NEW_VERSION}-bun.0" >> "$GITHUB_OUTPUT"
+          echo "new_tag_bun=v${NEW_VERSION}-bun.0"    >> "$GITHUB_OUTPUT"
 
       - name: Commit version bump
         run: |
@@ -90,18 +112,169 @@ jobs:
           git commit -m "chore(e2e): bump terrably → ${{ inputs.terrably_version }}, provider → v${{ steps.bump.outputs.new_version }}"
           git push
 
-      # ── 3. Build provider binaries ──────────────────────────────────────────
-      - name: Build provider
+  # ── 2a. Build provider binary with Node.js SEA ───────────────────────────
+  build-node:
+    name: Build (Node.js SEA)
+    needs: prepare
+    runs-on: ubuntu-slim
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - uses: pnpm/action-setup@v5
+        name: Setup pnpm
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        name: Setup Node
+        with:
+          node-version: "25.x"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build provider (Node.js SEA)
         run: pnpm run build
-        # terrably build produces bin/terraform-provider-gpcloud (current platform)
+
+      - uses: actions/upload-artifact@v7
+        name: Save build artifacts
+        with:
+          name: binary-node
+          path: bin/terraform-provider-gpcloud
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── 2b. Build all Bun targets (cross-compile, single ubuntu runner) ──────
+  # Bun cross-compiles all 5 platform targets from a single job.
+  # Each target is uploaded as a separate artifact so smoke-test-bun and
+  # publish-bun can download exactly the binary they need.
+  build-bun-cross:
+    name: Build (Bun, all targets)
+    needs: prepare
+    runs-on: ubuntu-slim
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - uses: oven-sh/setup-bun@v2
+        name: Setup Bun
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build for linux/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-linux-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for linux/amd64
+        with: { name: bun-linux-x64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for linux/arm64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-linux-arm64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for linux/arm64
+        with: { name: bun-linux-arm64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for darwin/arm64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-darwin-arm64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for darwin/arm64
+        with: { name: bun-darwin-arm64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for darwin/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-darwin-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for darwin/amd64
+        with: { name: bun-darwin-x64, path: bin/terraform-provider-gpcloud, if-no-files-found: error, retention-days: 1 }
+
+      - name: Build for windows/amd64
+        run: bun node_modules/terrably/dist/src/cli/index.js build --name gpcloud --target bun-windows-x64
+      - uses: actions/upload-artifact@v7
+        name: Upload build artifact for windows/amd64
+        with: { name: bun-windows-x64, path: bin/terraform-provider-gpcloud.exe, if-no-files-found: error, retention-days: 1 }
+
+  # ── 2c. Smoke-test each Bun binary on its native runner ──────────────────
+  # Downloads each cross-compiled binary and runs it on the matching OS/arch.
+  # Without the magic cookie the provider exits non-zero but must print the
+  # "Terraform provider plugin" banner — proving the binary runs natively.
+  # All runners below are free for public repositories on GitHub Actions.
+  smoke-test-bun:
+    name: Smoke test (${{ matrix.target }})
+    needs: build-bun-cross
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: bun-linux-x64,    runner: ubuntu-slim,      binary: terraform-provider-gpcloud     }
+          - { target: bun-darwin-arm64, runner: macos-latest,     binary: terraform-provider-gpcloud     }
+          - { target: bun-darwin-x64,   runner: macos-15-intel,   binary: terraform-provider-gpcloud     }
+          - { target: bun-windows-x64,  runner: windows-latest,   binary: terraform-provider-gpcloud.exe }
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.target }}
+          path: bin/
+
+      - name: Make binary executable
+        if: runner.os != 'Windows'
+        run: chmod +x bin/${{ matrix.binary }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          OUTPUT=$(bin/${{ matrix.binary }} 2>&1 || true)
+          if echo "$OUTPUT" | grep -q "Terraform provider plugin"; then
+            echo "✓ Smoke test passed on ${{ matrix.target }}."
+          else
+            echo "✗ Unexpected output:"
+            echo "$OUTPUT"
+            exit 1
+          fi
+
+  # ── 3a. Publish Node.js binary to Terraform Registry ─────────────────────
+  publish-node:
+    name: Publish Node.js release (${{ needs.prepare.outputs.new_version }})
+    needs: [prepare, build-node]
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - uses: pnpm/action-setup@v5
+        name: Setup pnpm
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        name: Setup Node
+        with:
+          node-version: "25.x"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v8
+        name: Download build artifact
+        with:
+          name: binary-node
+          path: release/
 
       - name: Rename binary for publish convention
         run: |
-          mkdir -p release
-          cp bin/terraform-provider-gpcloud \
+          mv release/terraform-provider-gpcloud \
              release/terraform-provider-gpcloud_linux_amd64
 
-      # ── 4. Publish to Terraform Registry via GitHub Release ─────────────────
       - name: Import GPG key
         id: gpg
         uses: crazy-max/ghaction-import-gpg@v7
@@ -109,12 +282,12 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Publish provider (create GitHub Release + registry assets)
+      - name: Publish (Node.js)
         run: |
           pnpm run publish \
-            --release-version ${{ steps.bump.outputs.new_version }} \
+            --release-version ${{ needs.prepare.outputs.new_version }} \
             --binaries-dir release \
-            --tag ${{ steps.bump.outputs.new_tag }} \
+            --tag ${{ needs.prepare.outputs.new_tag }} \
             --gpg-key ${{ steps.gpg.outputs.fingerprint }} \
             --github-release
         env:
@@ -125,11 +298,87 @@ jobs:
         run: |
           gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
 
-      # ── 5. Poll TF Registry until new version is indexed ────────────────────
-      - name: Wait for registry to index new version
+  # ── 3b. Publish Bun binary to Terraform Registry (pre-release) ───────────
+  publish-bun:
+    name: Publish Bun release (${{ needs.prepare.outputs.new_version_bun }})
+    needs: [prepare, build-bun-cross]
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - uses: pnpm/action-setup@v5
+        name: Setup pnpm
+        with:
+          version: 10
+
+      - uses: oven-sh/setup-bun@v2
+        name: Setup Bun
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      # Download all 5 Bun artifacts into separate subdirs, then rename each
+      # to the terraform-provider-{name}_{os}_{arch}[.exe] convention that
+      # detectBinaries() expects.  With merge-multiple: false (the default)
+      # each artifact lands in bun-artifacts/{artifact-name}/.
+      - uses: actions/download-artifact@v4
+        name: Download all Bun artifacts
+        with:
+          pattern: bun-*
+          path: bun-artifacts/
+
+      - name: Rename binaries to TF registry convention
+        run: |
+          mkdir -p release
+          mv bun-artifacts/bun-linux-x64/terraform-provider-gpcloud    release/terraform-provider-gpcloud_linux_amd64
+          mv bun-artifacts/bun-linux-arm64/terraform-provider-gpcloud  release/terraform-provider-gpcloud_linux_arm64
+          mv bun-artifacts/bun-darwin-arm64/terraform-provider-gpcloud release/terraform-provider-gpcloud_darwin_arm64
+          mv bun-artifacts/bun-darwin-x64/terraform-provider-gpcloud   release/terraform-provider-gpcloud_darwin_amd64
+          mv bun-artifacts/bun-windows-x64/terraform-provider-gpcloud.exe release/terraform-provider-gpcloud_windows_amd64.exe
+
+      - name: Import GPG key
+        id: gpg
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Publish (Bun pre-release)
+        run: |
+          pnpm run publish \
+            --release-version ${{ needs.prepare.outputs.new_version_bun }} \
+            --binaries-dir release \
+            --tag ${{ needs.prepare.outputs.new_tag_bun }} \
+            --gpg-key ${{ steps.gpg.outputs.fingerprint }} \
+            --github-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove GPG key from keyring
+        if: always()
+        run: |
+          gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
+
+  # ── 4a. E2E test — Node.js binary via Terraform Registry ─────────────────
+  e2e-node:
+    name: E2E test (Node.js, ${{ needs.prepare.outputs.new_version }})
+    needs: [prepare, publish-node]
+    runs-on: ubuntu-slim
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - name: Wait for registry to index Node.js version
         timeout-minutes: 15
         run: |
-          TARGET_VERSION="${{ steps.bump.outputs.new_version }}"
+          TARGET_VERSION="${{ needs.prepare.outputs.new_version }}"
           URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/versions"
           echo "Polling ${URL} for version ${TARGET_VERSION}..."
           for i in $(seq 1 30); do
@@ -144,31 +393,25 @@ jobs:
             echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
             sleep 30
           done
-          echo "✗ Timed out waiting for version ${TARGET_VERSION} to appear on registry."
+          echo "✗ Timed out waiting for ${TARGET_VERSION}."
           exit 1
 
-      # ── 6. Run Terraform E2E test ────────────────────────────────────────────
       - uses: hashicorp/setup-terraform@v4
         name: Setup Terraform
         with:
           terraform_version: latest
 
       - name: Remove local dev_overrides config
-        # tf-workspace/.terraformrc uses dev_overrides pointing to a local path.
-        # Terraform only reads ~/.terraformrc by default, but we delete it
-        # here to guarantee the E2E test always resolves the provider from the
-        # Terraform Registry, regardless of TF_CLI_CONFIG_FILE being set.
         run: rm -f tf-workspace/.terraformrc
 
       - name: Pin provider version in tf-workspace
         run: |
-          # Inject exact version constraint so this run always uses the freshly published binary.
           cat > tf-workspace/versions_override.tf << 'EOF'
           terraform {
             required_providers {
               gpcloud = {
                 source  = "paambaati/gpcloud"
-                version = "= ${{ steps.bump.outputs.new_version }}"
+                version = "= ${{ needs.prepare.outputs.new_version }}"
               }
             }
           }
@@ -201,7 +444,95 @@ jobs:
           echo "✓ item_id = ${ITEM_ID}"
 
       - name: Run terraform destroy
-        if: always()  # always clean up, even if verify fails
+        if: always()
+        working-directory: tf-workspace
+        run: terraform destroy -input=false -auto-approve
+
+      - name: Remove version override file
+        if: always()
+        run: rm -f tf-workspace/versions_override.tf
+
+  # ── 4b. E2E test — Bun binary via Terraform Registry (pre-release) ────────
+  e2e-bun:
+    name: E2E test (Bun, ${{ needs.prepare.outputs.new_version_bun }})
+    needs: [prepare, publish-bun]
+    runs-on: ubuntu-slim
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+
+      - name: Wait for registry to index Bun version
+        timeout-minutes: 15
+        run: |
+          TARGET_VERSION="${{ needs.prepare.outputs.new_version_bun }}"
+          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/versions"
+          echo "Polling ${URL} for version ${TARGET_VERSION}..."
+          for i in $(seq 1 30); do
+            VERSIONS=$(curl -sf "$URL" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              console.log(d.versions.map(v => v.version).join('\n'));
+            " 2>/dev/null || true)
+            if echo "$VERSIONS" | grep -qF "$TARGET_VERSION"; then
+              echo "✓ Version ${TARGET_VERSION} is live on the registry."
+              exit 0
+            fi
+            echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
+            sleep 30
+          done
+          echo "✗ Timed out waiting for ${TARGET_VERSION}."
+          exit 1
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: latest
+
+      - name: Remove local dev_overrides config
+        run: rm -f tf-workspace/.terraformrc
+
+      # Pre-release versions are not selected by open constraints (~> 1.0).
+      # We always use exact pinning in E2E tests so this is fine.
+      - name: Pin provider version in tf-workspace
+        run: |
+          cat > tf-workspace/versions_override.tf << 'EOF'
+          terraform {
+            required_providers {
+              gpcloud = {
+                source  = "paambaati/gpcloud"
+                version = "= ${{ needs.prepare.outputs.new_version_bun }}"
+              }
+            }
+          }
+          EOF
+
+      - name: Run terraform init
+        working-directory: tf-workspace
+        run: terraform init -input=false
+
+      - name: Run terraform validate
+        working-directory: tf-workspace
+        run: terraform validate
+
+      - name: Run terraform plan
+        working-directory: tf-workspace
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Run terraform apply
+        working-directory: tf-workspace
+        run: terraform apply -input=false tfplan
+
+      - name: Verify output
+        working-directory: tf-workspace
+        run: |
+          ITEM_ID=$(terraform output -raw item_id 2>/dev/null || true)
+          if [ -z "$ITEM_ID" ]; then
+            echo "✗ item_id output is empty — apply may have failed silently."
+            exit 1
+          fi
+          echo "✓ item_id = ${ITEM_ID}"
+
+      - name: Run terraform destroy
+        if: always()
         working-directory: tf-workspace
         run: terraform destroy -input=false -auto-approve
 
