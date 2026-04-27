@@ -323,16 +323,24 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - uses: actions/download-artifact@v8
-        name: Download build artifact
+      # Download all 5 Bun artifacts into separate subdirs, then rename each
+      # to the terraform-provider-{name}_{os}_{arch}[.exe] convention that
+      # detectBinaries() expects.  With merge-multiple: false (the default)
+      # each artifact lands in bun-artifacts/{artifact-name}/.
+      - uses: actions/download-artifact@v4
+        name: Download all Bun artifacts
         with:
-          name: bun-linux-x64
-          path: release/
+          pattern: bun-*
+          path: bun-artifacts/
 
-      - name: Rename binary for publish convention
+      - name: Rename binaries to TF registry convention
         run: |
-          mv release/terraform-provider-gpcloud \
-             release/terraform-provider-gpcloud_linux_amd64
+          mkdir -p release
+          mv bun-artifacts/bun-linux-x64/terraform-provider-gpcloud    release/terraform-provider-gpcloud_linux_amd64
+          mv bun-artifacts/bun-linux-arm64/terraform-provider-gpcloud  release/terraform-provider-gpcloud_linux_arm64
+          mv bun-artifacts/bun-darwin-arm64/terraform-provider-gpcloud release/terraform-provider-gpcloud_darwin_arm64
+          mv bun-artifacts/bun-darwin-x64/terraform-provider-gpcloud   release/terraform-provider-gpcloud_darwin_amd64
+          mv bun-artifacts/bun-windows-x64/terraform-provider-gpcloud.exe release/terraform-provider-gpcloud_windows_amd64.exe
 
       - name: Import GPG key
         id: gpg
