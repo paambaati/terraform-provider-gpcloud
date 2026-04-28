@@ -3,6 +3,8 @@ dist/
 release/
 bin/*
 !bin/.gitkeep
+.terrably-bun-*/
+bun.lock
 
 tf-workspace/.terraform/
 tf-workspace/.terraform.lock.hcl
