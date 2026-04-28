@@ -44,6 +44,7 @@ jobs:
       new_tag:         ${{ steps.bump.outputs.new_tag }}
       new_version_bun: ${{ steps.bump.outputs.new_version_bun }}
       new_tag_bun:     ${{ steps.bump.outputs.new_tag_bun }}
+      sha:             ${{ steps.push.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -105,12 +106,39 @@ jobs:
           echo "new_tag_bun=v${NEW_VERSION}-bun.0"    >> "$GITHUB_OUTPUT"
 
       - name: Commit version bump
+        id: push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json pnpm-lock.yaml
           git commit -m "chore(e2e): bump terrably → ${{ inputs.terrably_version }}, provider → v${{ steps.bump.outputs.new_version }}"
           git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Write run summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ## terrably E2E test — ${{ inputs.terrably_version }}
+
+          | | Value |
+          |---|---|
+          | **terrably version** | \`${{ inputs.terrably_version }}\` |
+          | **Node.js provider tag** | \`${{ steps.bump.outputs.new_tag }}\` |
+          | **Bun provider tag** | \`${{ steps.bump.outputs.new_tag_bun }}\` |
+          | **Commit** | \`${{ steps.push.outputs.sha }}\` |
+
+          ### Job plan
+
+          | Job | Description |
+          |---|---|
+          | \`build-node\` | Compile Node.js SEA binary (linux/amd64) |
+          | \`build-bun-cross\` | Cross-compile Bun binaries for all 5 targets |
+          | \`smoke-test-bun\` | Run each Bun binary on its native runner |
+          | \`publish-node\` | Publish \`${{ steps.bump.outputs.new_tag }}\` to Terraform Registry |
+          | \`publish-bun\` | Publish \`${{ steps.bump.outputs.new_tag_bun }}\` to Terraform Registry |
+          | \`e2e-node\` | Full Terraform plan/apply/destroy with Node.js binary |
+          | \`e2e-bun\` | Full Terraform plan/apply/destroy with Bun binary |
+          EOF
 
   # ── 2a. Build provider binary with Node.js SEA ───────────────────────────
   build-node:
@@ -121,6 +149,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: pnpm/action-setup@v5
         name: Setup pnpm
@@ -159,6 +189,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: oven-sh/setup-bun@v2
         name: Setup Bun
@@ -249,6 +281,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: pnpm/action-setup@v5
         name: Setup pnpm
@@ -309,6 +343,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: pnpm/action-setup@v5
         name: Setup pnpm
@@ -374,6 +410,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Wait for registry to index Node.js version
         timeout-minutes: 15
@@ -452,6 +490,15 @@ jobs:
         if: always()
         run: rm -f tf-workspace/versions_override.tf
 
+      - name: Write test result to summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### ✅ Tests passed — Node.js \`${{ needs.prepare.outputs.new_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ Tests failed — Node.js \`${{ needs.prepare.outputs.new_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   # ── 4b. E2E test — Bun binary via Terraform Registry (pre-release) ────────
   e2e-bun:
     name: E2E test (Bun, ${{ needs.prepare.outputs.new_version_bun }})
@@ -461,6 +508,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Wait for registry to index Bun version
         timeout-minutes: 15
@@ -539,3 +588,12 @@ jobs:
       - name: Remove version override file
         if: always()
         run: rm -f tf-workspace/versions_override.tf
+
+      - name: Write test result to summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### ✅ Tests passed — Bun \`${{ needs.prepare.outputs.new_tag_bun }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ Tests failed — Bun \`${{ needs.prepare.outputs.new_tag_bun }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
