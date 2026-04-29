@@ -336,6 +336,7 @@ jobs:
             --binaries-dir release \
             --tag ${{ needs.prepare.outputs.new_tag }} \
             --gpg-key ${{ steps.gpg.outputs.fingerprint }} \
+            --extra-assets tf-workspace/README.md \
             --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -400,6 +401,7 @@ jobs:
             --binaries-dir release \
             --tag ${{ needs.prepare.outputs.new_tag_bun }} \
             --gpg-key ${{ steps.gpg.outputs.fingerprint }} \
+            --extra-assets tf-workspace/README.md \
             --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
