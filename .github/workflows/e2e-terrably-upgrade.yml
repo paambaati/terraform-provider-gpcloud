@@ -340,11 +340,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Remove GPG key from keyring
-        if: always()
-        run: |
-          gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
-
   # ── 3b. Publish Bun binary to Terraform Registry ───────────
   publish-bun:
     name: Publish Bun release (${{ needs.prepare.outputs.new_version_bun }})
@@ -408,11 +403,6 @@ jobs:
             --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Remove GPG key from keyring
-        if: always()
-        run: |
-          gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
 
   # ── 4a. E2E test — Node.js binary via Terraform Registry ─────────────────
   e2e-node:
