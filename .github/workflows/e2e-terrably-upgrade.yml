@@ -444,16 +444,9 @@ jobs:
           # Retry only for the registry propagation error (versions list not yet
           # updated). Any other init failure surfaces immediately as a real error.
           for i in $(seq 1 30); do
-            OUT=$(terraform init -input=false -json 2>&1) && exit 0
-            # Pretty-print diagnostics from structured JSON output
-            echo "$OUT" | jq -Rc 'fromjson? | select(.type == "diagnostic") |
-              "[\(.diagnostic.severity | ascii_upcase)] \(.diagnostic.summary): \(.diagnostic.detail)"' 2>/dev/null || echo "$OUT"
-            # Retry only for the registry-not-yet-propagated error
-            if echo "$OUT" | jq -Rse '
-              [split("\n")[] | select(length > 0) | (try fromjson catch null) |
-               select(. != null and .type == "diagnostic" and
-                      .diagnostic.summary == "Failed to query available provider packages")]
-              | length > 0' >/dev/null; then
+            OUT=$(terraform init -input=false 2>&1) && exit 0
+            echo "$OUT"
+            if echo "$OUT" | grep -q "Failed to query available provider packages"; then
               echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
               rm -rf .terraform .terraform.lock.hcl
               sleep 30
@@ -545,14 +538,9 @@ jobs:
         working-directory: tf-workspace
         run: |
           for i in $(seq 1 30); do
-            OUT=$(terraform init -input=false -json 2>&1) && exit 0
-            echo "$OUT" | jq -Rc 'fromjson? | select(.type == "diagnostic") |
-              "[\(.diagnostic.severity | ascii_upcase)] \(.diagnostic.summary): \(.diagnostic.detail)"' 2>/dev/null || echo "$OUT"
-            if echo "$OUT" | jq -Rse '
-              [split("\n")[] | select(length > 0) | (try fromjson catch null) |
-               select(. != null and .type == "diagnostic" and
-                      .diagnostic.summary == "Failed to query available provider packages")]
-              | length > 0' >/dev/null; then
+            OUT=$(terraform init -input=false 2>&1) && exit 0
+            echo "$OUT"
+            if echo "$OUT" | grep -q "Failed to query available provider packages"; then
               echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
               rm -rf .terraform .terraform.lock.hcl
               sleep 30
