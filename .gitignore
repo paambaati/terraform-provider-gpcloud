@@ -4,6 +4,7 @@ release/
 bin/*
 !bin/.gitkeep
 .terrably-bun-*/
+_terrably_bun_entry_*.ts
 bun.lock
 
 tf-workspace/.terraform/

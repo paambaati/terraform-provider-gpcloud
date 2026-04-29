@@ -533,6 +533,7 @@ jobs:
           exit 1
 
       - uses: hashicorp/setup-terraform@v4
+        name: Setup Terraform
         with:
           terraform_version: latest
 
