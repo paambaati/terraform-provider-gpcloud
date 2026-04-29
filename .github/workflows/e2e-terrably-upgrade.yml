@@ -32,7 +32,7 @@ jobs:
   # ── 1. Bump terrably + provider version, commit, push ────────────────────
   # One commit, two version strings derived from it:
   #   new_version     = X.Y.Z       (Node.js release — semver stable)
-  #   new_version_bun = X.Y.Z-bun.0 (Bun pre-release — same registry, explicit-only)
+  #   new_version_bun = X.Y.Z-bun.0 (Bun release — same registry, explicit-only)
   prepare:
     name: Bump versions & push
     runs-on: ubuntu-slim
@@ -100,8 +100,8 @@ jobs:
           "
           echo "new_version=${NEW_VERSION}"          >> "$GITHUB_OUTPUT"
           echo "new_tag=v${NEW_VERSION}"             >> "$GITHUB_OUTPUT"
-          # Bun pre-release: same base version, -bun.0 suffix.
-          # Semver pre-release — registry indexes it but Terraform won't auto-select it.
+          # Bun release: same base version, -bun.0 suffix.
+          # Semver release — registry indexes it but Terraform won't auto-select it.
           echo "new_version_bun=${NEW_VERSION}-bun.0" >> "$GITHUB_OUTPUT"
           echo "new_tag_bun=v${NEW_VERSION}-bun.0"    >> "$GITHUB_OUTPUT"
 
@@ -332,7 +332,7 @@ jobs:
         run: |
           gpg --batch --yes --delete-secret-and-public-key ${{ steps.gpg.outputs.fingerprint }}
 
-  # ── 3b. Publish Bun binary to Terraform Registry (pre-release) ───────────
+  # ── 3b. Publish Bun binary to Terraform Registry ───────────
   publish-bun:
     name: Publish Bun release (${{ needs.prepare.outputs.new_version_bun }})
     needs: [prepare, build-bun-cross]
@@ -385,7 +385,7 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Publish (Bun pre-release)
+      - name: Publish (Bun release)
         run: |
           pnpm run publish \
             --release-version ${{ needs.prepare.outputs.new_version_bun }} \
@@ -499,7 +499,7 @@ jobs:
             echo "### ❌ Tests failed — Node.js \`${{ needs.prepare.outputs.new_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # ── 4b. E2E test — Bun binary via Terraform Registry (pre-release) ────────
+  # ── 4b. E2E test — Bun binary via Terraform Registry ────────
   e2e-bun:
     name: E2E test (Bun, ${{ needs.prepare.outputs.new_version_bun }})
     needs: [prepare, publish-bun]
