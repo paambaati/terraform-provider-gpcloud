@@ -426,7 +426,6 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Wait for registry to index Node.js version
       - name: Wait for Node.js binary to be downloadable from registry
         timeout-minutes: 15
         run: |
