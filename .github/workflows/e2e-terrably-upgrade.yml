@@ -426,24 +426,6 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Wait for Node.js binary to be downloadable from registry
-        timeout-minutes: 15
-        run: |
-          TARGET_VERSION="${{ needs.prepare.outputs.new_version }}"
-          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/${TARGET_VERSION}/download/linux/amd64"
-          echo "Polling download endpoint: ${URL}"
-          for i in $(seq 1 30); do
-            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "✓ Binary download endpoint returned 200 — registry is ready."
-              exit 0
-            fi
-            echo "  (attempt ${i}/30) HTTP ${STATUS}, waiting 30s..."
-            sleep 30
-          done
-          echo "✗ Timed out waiting for download endpoint to return 200."
-          exit 1
-
       - uses: hashicorp/setup-terraform@v4
         name: Setup Terraform
         with:
@@ -465,9 +447,33 @@ jobs:
           }
           EOF
 
-      - name: Run terraform init
+      - name: Run terraform init (with registry propagation retry)
+        timeout-minutes: 15
         working-directory: tf-workspace
-        run: terraform init -input=false
+        run: |
+          # Retry only for the registry propagation error (versions list not yet
+          # updated). Any other init failure surfaces immediately as a real error.
+          for i in $(seq 1 30); do
+            OUT=$(terraform init -input=false -json 2>&1) && exit 0
+            # Pretty-print diagnostics from structured JSON output
+            echo "$OUT" | jq -Rc 'fromjson? | select(.type == "diagnostic") |
+              "[\(.diagnostic.severity | ascii_upcase)] \(.diagnostic.summary): \(.diagnostic.detail)"' 2>/dev/null || echo "$OUT"
+            # Retry only for the registry-not-yet-propagated error
+            if echo "$OUT" | jq -Rse '
+              [split("\n")[] | select(length > 0) | (try fromjson catch null) |
+               select(. != null and .type == "diagnostic" and
+                      .diagnostic.summary == "Failed to query available provider packages")]
+              | length > 0' >/dev/null; then
+              echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
+              rm -rf .terraform .terraform.lock.hcl
+              sleep 30
+            else
+              echo "  terraform init failed with an unexpected error — not retrying."
+              exit 1
+            fi
+          done
+          echo "✗ terraform init did not succeed after 30 attempts."
+          exit 1
 
       - name: Run terraform validate
         working-directory: tf-workspace
@@ -521,29 +527,6 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Wait for Bun binary to be downloadable from registry
-        timeout-minutes: 15
-        run: |
-          TARGET_VERSION="${{ needs.prepare.outputs.new_version_bun }}"
-          # Poll the download API endpoint, not the versions list.
-          # The versions list updates as soon as the release is ingested, but
-          # the binary download CDN takes longer to propagate. The download
-          # endpoint returns 404 until the binary files are actually staged,
-          # so a 200 here means terraform init will succeed immediately.
-          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/${TARGET_VERSION}/download/linux/amd64"
-          echo "Polling download endpoint: ${URL}"
-          for i in $(seq 1 30); do
-            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "✓ Binary download endpoint returned 200 — registry is ready."
-              exit 0
-            fi
-            echo "  (attempt ${i}/30) HTTP ${STATUS}, waiting 30s..."
-            sleep 30
-          done
-          echo "✗ Timed out waiting for download endpoint to return 200."
-          exit 1
-
       - uses: hashicorp/setup-terraform@v4
         name: Setup Terraform
         with:
@@ -567,9 +550,29 @@ jobs:
           }
           EOF
 
-      - name: Run terraform init
+      - name: Run terraform init (with registry propagation retry)
+        timeout-minutes: 15
         working-directory: tf-workspace
-        run: terraform init -input=false
+        run: |
+          for i in $(seq 1 30); do
+            OUT=$(terraform init -input=false -json 2>&1) && exit 0
+            echo "$OUT" | jq -Rc 'fromjson? | select(.type == "diagnostic") |
+              "[\(.diagnostic.severity | ascii_upcase)] \(.diagnostic.summary): \(.diagnostic.detail)"' 2>/dev/null || echo "$OUT"
+            if echo "$OUT" | jq -Rse '
+              [split("\n")[] | select(length > 0) | (try fromjson catch null) |
+               select(. != null and .type == "diagnostic" and
+                      .diagnostic.summary == "Failed to query available provider packages")]
+              | length > 0' >/dev/null; then
+              echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
+              rm -rf .terraform .terraform.lock.hcl
+              sleep 30
+            else
+              echo "  terraform init failed with an unexpected error — not retrying."
+              exit 1
+            fi
+          done
+          echo "✗ terraform init did not succeed after 30 attempts."
+          exit 1
 
       - name: Run terraform validate
         working-directory: tf-workspace
