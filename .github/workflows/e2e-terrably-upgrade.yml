@@ -64,6 +64,11 @@ jobs:
           node-version: "25.x"
           cache: pnpm
 
+      - uses: oven-sh/setup-bun@v2
+        name: Setup Bun
+        with:
+          bun-version: latest
+
       - name: Resolve npm version from git tag
         id: meta
         run: |
