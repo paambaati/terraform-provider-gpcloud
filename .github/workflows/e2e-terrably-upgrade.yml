@@ -376,7 +376,7 @@ jobs:
       # to the terraform-provider-{name}_{os}_{arch}[.exe] convention that
       # detectBinaries() expects.  With merge-multiple: false (the default)
       # each artifact lands in bun-artifacts/{artifact-name}/.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         name: Download all Bun artifacts
         with:
           pattern: bun-*
