@@ -83,6 +83,14 @@ jobs:
       - name: Install updated dependencies
         run: pnpm install --no-frozen-lockfile
 
+      # Regenerate bun.lock to match the updated terrably version.
+      # build-bun-cross uses `bun install` — if bun.lock is stale (e.g. still
+      # references a file: workspace path from local dev), Bun may install a
+      # different set of transitive dependencies, causing the _bun_patch fix to
+      # target the wrong protobufjs instance and leaving util.Buffer null.
+      - name: Regenerate bun.lock
+        run: bun install
+
       # We need a new gpcloud version for each terrably release so the TF registry
       # gets a distinct, unambiguous release to index.
       - name: Bump provider patch version
@@ -110,7 +118,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json pnpm-lock.yaml
+          git add package.json pnpm-lock.yaml bun.lock
           git commit -m "chore(e2e): bump terrably → ${{ inputs.terrably_version }}, provider → v${{ steps.bump.outputs.new_version }}"
           git push
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
