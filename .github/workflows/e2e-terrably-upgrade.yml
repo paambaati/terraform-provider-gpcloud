@@ -439,6 +439,9 @@ jobs:
             " 2>/dev/null || true)
             if echo "$VERSIONS" | grep -qF "$TARGET_VERSION"; then
               echo "✓ Version ${TARGET_VERSION} is live on the registry."
+              # Extra wait: the versions list endpoint updates before the binary
+              # download endpoint is ready. Give the CDN 30s to propagate.
+              sleep 30
               exit 0
             fi
             echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
