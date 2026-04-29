@@ -443,11 +443,11 @@ jobs:
         run: |
           # Retry only for the registry propagation error (versions list not yet
           # updated). Any other init failure surfaces immediately as a real error.
-          for i in $(seq 1 30); do
+          for i in $(seq 1 25); do
             OUT=$(terraform init -input=false 2>&1) && exit 0
             echo "$OUT"
             if echo "$OUT" | grep -q "Failed to query available provider packages"; then
-              echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
+              echo "  (attempt ${i}/25) Registry not yet propagated, waiting 30s..."
               rm -rf .terraform .terraform.lock.hcl
               sleep 30
             else
@@ -455,7 +455,7 @@ jobs:
               exit 1
             fi
           done
-          echo "✗ terraform init did not succeed after 30 attempts."
+          echo "✗ terraform init did not succeed after 25 attempts."
           exit 1
 
       - name: Run terraform validate
@@ -537,11 +537,11 @@ jobs:
         timeout-minutes: 15
         working-directory: tf-workspace
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 25); do
             OUT=$(terraform init -input=false 2>&1) && exit 0
             echo "$OUT"
             if echo "$OUT" | grep -q "Failed to query available provider packages"; then
-              echo "  (attempt ${i}/30) Registry not yet propagated, waiting 30s..."
+              echo "  (attempt ${i}/25) Registry not yet propagated, waiting 30s..."
               rm -rf .terraform .terraform.lock.hcl
               sleep 30
             else
@@ -549,7 +549,7 @@ jobs:
               exit 1
             fi
           done
-          echo "✗ terraform init did not succeed after 30 attempts."
+          echo "✗ terraform init did not succeed after 25 attempts."
           exit 1
 
       - name: Run terraform validate
