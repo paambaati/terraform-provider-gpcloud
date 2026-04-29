@@ -427,27 +427,22 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Wait for registry to index Node.js version
+      - name: Wait for Node.js binary to be downloadable from registry
         timeout-minutes: 15
         run: |
           TARGET_VERSION="${{ needs.prepare.outputs.new_version }}"
-          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/versions"
-          echo "Polling ${URL} for version ${TARGET_VERSION}..."
+          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/${TARGET_VERSION}/download/linux/amd64"
+          echo "Polling download endpoint: ${URL}"
           for i in $(seq 1 30); do
-            VERSIONS=$(curl -sf "$URL" | node -e "
-              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-              console.log(d.versions.map(v => v.version).join('\n'));
-            " 2>/dev/null || true)
-            if echo "$VERSIONS" | grep -qF "$TARGET_VERSION"; then
-              echo "✓ Version ${TARGET_VERSION} is live on the registry."
-              # Extra wait: the versions list endpoint updates before the binary
-              # download endpoint is ready. Give the CDN 30s to propagate.
-              sleep 30
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Binary download endpoint returned 200 — registry is ready."
               exit 0
             fi
-            echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
+            echo "  (attempt ${i}/30) HTTP ${STATUS}, waiting 30s..."
             sleep 30
           done
-          echo "✗ Timed out waiting for ${TARGET_VERSION}."
+          echo "✗ Timed out waiting for download endpoint to return 200."
           exit 1
 
       - uses: hashicorp/setup-terraform@v4
@@ -527,28 +522,27 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Wait for registry to index Bun version
+      - name: Wait for Bun binary to be downloadable from registry
         timeout-minutes: 15
         run: |
           TARGET_VERSION="${{ needs.prepare.outputs.new_version_bun }}"
-          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/versions"
-          echo "Polling ${URL} for version ${TARGET_VERSION}..."
+          # Poll the download API endpoint, not the versions list.
+          # The versions list updates as soon as the release is ingested, but
+          # the binary download CDN takes longer to propagate. The download
+          # endpoint returns 404 until the binary files are actually staged,
+          # so a 200 here means terraform init will succeed immediately.
+          URL="https://registry.terraform.io/v1/providers/paambaati/gpcloud/${TARGET_VERSION}/download/linux/amd64"
+          echo "Polling download endpoint: ${URL}"
           for i in $(seq 1 30); do
-            VERSIONS=$(curl -sf "$URL" | node -e "
-              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-              console.log(d.versions.map(v => v.version).join('\n'));
-            " 2>/dev/null || true)
-            if echo "$VERSIONS" | grep -qF "$TARGET_VERSION"; then
-              echo "✓ Version ${TARGET_VERSION} is live on the registry."
-              # Extra wait: the versions list endpoint updates before the binary
-              # download endpoint is ready. Give the CDN 30s to propagate.
-              sleep 30
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Binary download endpoint returned 200 — registry is ready."
               exit 0
             fi
-            echo "  (attempt ${i}/30) not yet indexed, waiting 30s..."
+            echo "  (attempt ${i}/30) HTTP ${STATUS}, waiting 30s..."
             sleep 30
           done
-          echo "✗ Timed out waiting for ${TARGET_VERSION}."
+          echo "✗ Timed out waiting for download endpoint to return 200."
           exit 1
 
       - uses: hashicorp/setup-terraform@v4
