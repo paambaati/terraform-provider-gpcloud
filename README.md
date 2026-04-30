@@ -96,7 +96,7 @@ bun node_modules/terrably/dist/src/cli/index.js build --target bun-linux-x64
 
 ## Local development
 
-To use a locally built binary during development, create a [dev overrides](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers) file:
+To use a locally built binary during development, create a [`dev_overrides`](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers) file –
 
 ```hcl
 # tf-workspace/.terraformrc
@@ -119,7 +119,7 @@ terraform -chdir=tf-workspace plan
 
 ## Publishing a release
 
-Releases are built and published automatically via the [terrably E2E workflow](.github/workflows/e2e-terrably-upgrade.yml). To publish manually:
+Releases are built and published automatically via the [terrably E2E workflow](.github/workflows/e2e-terrably-upgrade.yml). To publish manually –
 
 ```bash
 # Build all platform binaries first, then:
