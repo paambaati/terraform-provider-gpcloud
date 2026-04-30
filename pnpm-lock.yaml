@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       terrably:
-        specifier: 0.0.14
-        version: 0.0.14
+        specifier: 0.0.15
+        version: 0.0.15
     devDependencies:
       '@types/node':
         specifier: 25.6.0
@@ -624,8 +624,8 @@ packages:
     resolution: {integrity: sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==}
     engines: {node: '>=8'}
 
-  terrably@0.0.14:
-    resolution: {integrity: sha512-YBNBXqsGKuY0YcAMNc6BqtdC4f2gigxs8+FBwrcUrEiF+yQf/QA5I2UEg6uvcAXNZhjMYb/VrLiEQCeL78VwVA==}
+  terrably@0.0.15:
+    resolution: {integrity: sha512-v+i30TdiWppA9yPMKaPz4ti4tFtiZfX2N0qlLyH5bt/1gm8PLttJKnh6xaQxvhPl2DxlpXGWIUfMGAU1M7dfHw==}
     engines: {bun: '>=0.6.0', node: '>=25.5.0'}
     hasBin: true
 
@@ -1225,7 +1225,7 @@ snapshots:
     dependencies:
       ansi-regex: 5.0.1
 
-  terrably@0.0.14:
+  terrably@0.0.15:
     dependencies:
       '@bufbuild/protobuf': 2.12.0
       '@grpc/grpc-js': 1.14.3
