@@ -1,0 +1,23 @@
+---
+page_title: "{{ .Name }} Resource - {{ .RenderedProviderName }}"
+description: |-
+  Manages a {{ .RenderedProviderName }} item.
+---
+
+# {{ .Name }} (Resource)
+
+Manages a {{ .RenderedProviderName }} item.
+
+## Example Usage
+
+```terraform
+resource "{{ .Name }}" "example" {
+  name = "hello"
+}
+
+output "item_id" {
+  value = {{ .Name }}.example.id
+}
+```
+
+{{ .SchemaMarkdown | trimspace }}

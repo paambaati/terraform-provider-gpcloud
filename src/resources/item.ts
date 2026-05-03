@@ -25,8 +25,8 @@ export class GpcloudItem implements Resource {
 
   getSchema(): Schema {
     return new Schema([
-      new Attribute("id",   types.string(), { computed: true }),
-      new Attribute("name", types.string(), { required: true }),
+      new Attribute("id",   types.string(), { computed: true, description: "Unique identifier of the item, derived from its name." }),
+      new Attribute("name", types.string(), { required: true, description: "Human-readable name for the item." }),
     ]);
   }
 
