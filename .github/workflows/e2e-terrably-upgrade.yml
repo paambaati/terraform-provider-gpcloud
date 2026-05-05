@@ -317,6 +317,8 @@ jobs:
 
       - uses: actions/setup-go@v6
         name: Setup Go
+        with:
+          go-version: 'stable'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
