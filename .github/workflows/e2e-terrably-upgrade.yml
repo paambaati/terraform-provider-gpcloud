@@ -146,6 +146,7 @@ jobs:
           |---|---|
           | \`build-node\` | Compile Node.js SEA binary (linux/amd64) |
           | \`build-bun-cross\` | Cross-compile Bun binaries for all 5 targets |
+          | \`generate-docs\` | Auto-generate documentation for the built provider |
           | \`smoke-test-bun\` | Run each Bun binary on its native runner |
           | \`publish-node\` | Publish \`${{ steps.bump.outputs.new_tag }}\` to Terraform Registry |
           | \`publish-bun\` | Publish \`${{ steps.bump.outputs.new_tag_bun }}\` to Terraform Registry |
@@ -313,6 +314,9 @@ jobs:
         with:
           node-version: "25.x"
           cache: pnpm
+
+      - uses: actions/setup-go@v6
+        name: Setup Go
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
