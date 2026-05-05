@@ -283,10 +283,79 @@ jobs:
             exit 1
           fi
 
-  # ── 3a. Publish Node.js binary to Terraform Registry ─────────────────────
+  # ── 3. Generate and commit registry docs ────────────────────────────────────
+  # Runs after the Node.js binary is available (needed for schema extraction).
+  # Commits docs/ to the repo so the Terraform Registry can read them from the
+  # release tag's git tree — registry docs are read from git, not release assets.
+  generate-docs:
+    name: Generate & commit registry docs
+    needs: [prepare, build-node]
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.push.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v6
+        name: Checkout code
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          token: ${{ secrets.PUBLISH_TOKEN }}
+
+      - uses: pnpm/action-setup@v5
+        name: Setup pnpm
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        name: Setup Node
+        with:
+          node-version: "25.x"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v8
+        name: Download Node.js binary
+        with:
+          name: binary-node
+          path: bin/
+
+      - name: Make binary executable
+        run: chmod +x bin/terraform-provider-gpcloud
+
+      - uses: hashicorp/setup-terraform@v4
+        name: Setup Terraform
+        with:
+          terraform_version: latest
+
+      - name: Install tfplugindocs
+        run: go install github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest
+
+      - name: Generate docs
+        run: pnpm run docs:gen
+
+      - name: Commit docs
+        id: push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          if git diff --cached --quiet; then
+            echo "No docs changes — skipping commit."
+            echo "sha=${{ needs.prepare.outputs.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "docs: regenerate for v${{ needs.prepare.outputs.new_version }}"
+            git push
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 4a. Publish Node.js binary to Terraform Registry ─────────────────────
   publish-node:
     name: Publish Node.js release (${{ needs.prepare.outputs.new_version }})
-    needs: [prepare, build-node]
+    needs: [prepare, generate-docs, build-node]
     runs-on: ubuntu-slim
     permissions:
       contents: write
@@ -295,7 +364,7 @@ jobs:
       - uses: actions/checkout@v6
         name: Checkout code
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ needs.generate-docs.outputs.sha }}
 
       - uses: pnpm/action-setup@v5
         name: Setup pnpm
@@ -341,10 +410,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── 3b. Publish Bun binary to Terraform Registry ───────────
+  # ── 4b. Publish Bun binary to Terraform Registry ───────────
   publish-bun:
     name: Publish Bun release (${{ needs.prepare.outputs.new_version_bun }})
-    needs: [prepare, build-bun-cross]
+    needs: [prepare, generate-docs, build-bun-cross]
     runs-on: ubuntu-slim
     permissions:
       contents: write
@@ -353,7 +422,7 @@ jobs:
       - uses: actions/checkout@v6
         name: Checkout code
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ needs.generate-docs.outputs.sha }}
 
       - uses: pnpm/action-setup@v5
         name: Setup pnpm

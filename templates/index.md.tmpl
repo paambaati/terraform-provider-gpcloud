@@ -1,0 +1,23 @@
+---
+page_title: "Provider: {{ .RenderedProviderName }}"
+description: |-
+  Use the {{ .RenderedProviderName }} provider to manage {{ .RenderedProviderName }} resources via the API.
+---
+
+# {{ .RenderedProviderName }} Provider
+
+Use the `{{ .ProviderName }}` provider to interact with resources provided by the GPCloud API.
+
+## Example Usage
+
+```terraform
+provider "{{ .ProviderName }}" {
+  api_url = "https://api.gpcloud.example.com"
+}
+
+resource "{{ .ProviderName }}_item" "example" {
+  name = "hello"
+}
+```
+
+{{ .SchemaMarkdown | trimspace }}

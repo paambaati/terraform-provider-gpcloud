@@ -24,7 +24,7 @@ export class GpcloudProvider implements Provider {
 
   getProviderSchema(_diags: Diagnostics): Schema {
     return new Schema([
-      new Attribute("api_url", types.string(), { optional: true }),
+      new Attribute("api_url", types.string(), { optional: true, description: "Base URL of the GPCloud API endpoint. Defaults to the production endpoint if not set." }),
     ]);
   }
 
